@@ -57,15 +57,6 @@ class UploadError(Exception):
   def __str__(self):
     return self.reason
 
-class DownloadError(Exception):
-  """Cannot download a repository.
-  """
-  def __init__(self, reason):
-    self.reason = reason
-
-  def __str__(self):
-    return self.reason
-
 class NoSuchProjectError(Exception):
   """A specified project does not exist in the work tree.
   """

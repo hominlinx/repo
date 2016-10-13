@@ -28,14 +28,6 @@ try:
 except ImportError:
   import dummy_threading as _threading
 
-try:
-  import resource
-  def _rlimit_nofile():
-    return resource.getrlimit(resource.RLIMIT_NOFILE)
-except ImportError:
-  def _rlimit_nofile():
-    return (256, 256)
-
 from git_command import GIT
 from git_refs import R_HEADS
 from project import HEAD
@@ -80,8 +72,7 @@ revision is temporarily needed.
 
 The -s/--smart-sync option can be used to sync to a known good
 build as specified by the manifest-server element in the current
-manifest. The -t/--smart-tag option is similar and allows you to
-specify a custom tag/label.
+manifest.
 
 The -f/--force-broken option can be used to proceed with syncing
 other projects if a project sync fails.
@@ -117,8 +108,6 @@ later is required to fix a server side protocol bug.
 """
 
   def _Options(self, p, show_smart=True):
-    self.jobs = self.manifest.default.sync_j
-
     p.add_option('-f', '--force-broken',
                  dest='force_broken', action='store_true',
                  help="continue sync even if a project fails to sync")
@@ -136,14 +125,11 @@ later is required to fix a server side protocol bug.
                  help='be more quiet')
     p.add_option('-j','--jobs',
                  dest='jobs', action='store', type='int',
-                 help="projects to fetch simultaneously (default %d)" % self.jobs)
+                 help="number of projects to fetch simultaneously")
     if show_smart:
       p.add_option('-s', '--smart-sync',
                    dest='smart_sync', action='store_true',
                    help='smart sync using manifest from a known good build')
-      p.add_option('-t', '--smart-tag',
-                   dest='smart_tag', action='store',
-                   help='smart sync using manifest from a known tag')
 
     g = p.add_option_group('repo Version options')
     g.add_option('--no-repo-verify',
@@ -195,11 +181,15 @@ later is required to fix a server side protocol bug.
 
           fetched.add(project.gitdir)
           pm.update()
-        except _FetchError:
+        except BaseException, e:
+          # Notify the _Fetch() function about all errors.
           err_event.set()
-        except:
-          err_event.set()
-          raise
+
+          # If we got our own _FetchError, we don't want a stack trace.
+          # However, if we got something else (something in Sync_NetworkHalf?),
+          # we'd like one (so re-raise after we've set err_event).
+          if not isinstance(e, _FetchError):
+            raise
       finally:
         if did_lock:
           lock.release()
@@ -318,10 +308,6 @@ uncommitted changes are present' % project.relpath
   def Execute(self, opt, args):
     if opt.jobs:
       self.jobs = opt.jobs
-    if self.jobs > 1:
-      soft_limit, _ = _rlimit_nofile()
-      self.jobs = min(self.jobs, (soft_limit - 5) / 3)
-
     if opt.network_only and opt.detach_head:
       print >>sys.stderr, 'error: cannot combine -n and -d'
       sys.exit(1)
@@ -329,31 +315,27 @@ uncommitted changes are present' % project.relpath
       print >>sys.stderr, 'error: cannot combine -n and -l'
       sys.exit(1)
 
-    if opt.smart_sync or opt.smart_tag:
+    if opt.smart_sync:
       if not self.manifest.manifest_server:
         print >>sys.stderr, \
             'error: cannot smart sync: no manifest server defined in manifest'
         sys.exit(1)
       try:
         server = xmlrpclib.Server(self.manifest.manifest_server)
-        if opt.smart_sync:
-          p = self.manifest.manifestProject
-          b = p.GetBranch(p.CurrentBranch)
-          branch = b.merge
-          if branch.startswith(R_HEADS):
-            branch = branch[len(R_HEADS):]
+        p = self.manifest.manifestProject
+        b = p.GetBranch(p.CurrentBranch)
+        branch = b.merge
+        if branch.startswith(R_HEADS):
+          branch = branch[len(R_HEADS):]
 
-          env = os.environ.copy()
-          if (env.has_key('TARGET_PRODUCT') and
-              env.has_key('TARGET_BUILD_VARIANT')):
-            target = '%s-%s' % (env['TARGET_PRODUCT'],
-                                env['TARGET_BUILD_VARIANT'])
-            [success, manifest_str] = server.GetApprovedManifest(branch, target)
-          else:
-            [success, manifest_str] = server.GetApprovedManifest(branch)
+        env = os.environ.copy()
+        if (env.has_key('TARGET_PRODUCT') and
+            env.has_key('TARGET_BUILD_VARIANT')):
+          target = '%s-%s' % (env['TARGET_PRODUCT'],
+                              env['TARGET_BUILD_VARIANT'])
+          [success, manifest_str] = server.GetApprovedManifest(branch, target)
         else:
-          assert(opt.smart_tag)
-          [success, manifest_str] = server.GetManifest(opt.smart_tag)
+          [success, manifest_str] = server.GetApprovedManifest(branch)
 
         if success:
           manifest_name = "smart_sync_override.xml"
@@ -396,8 +378,6 @@ uncommitted changes are present' % project.relpath
       if not syncbuf.Finish():
         sys.exit(1)
       self.manifest._Unload()
-      if opt.jobs is None:
-        self.jobs = self.manifest.default.sync_j
     all = self.GetProjects(args, missing_ok=True)
 
     if not opt.local_only:
