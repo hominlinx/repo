@@ -26,6 +26,7 @@ import time
 import urllib2
 
 from signal import SIGTERM
+from urllib2 import urlopen, HTTPError
 from error import GitError, UploadError
 from trace import Trace
 
@@ -196,15 +197,6 @@ class GitConfig(object):
       return subsection in self._sections[section]
     except KeyError:
       return False
-
-  def UrlInsteadOf(self, url):
-    """Resolve any url.*.insteadof references.
-    """
-    for new_url in self.GetSubSections('url'):
-      old_url = self.GetString('url.%s.insteadof' % new_url)
-      if old_url is not None and url.startswith(old_url):
-        return new_url + url[len(old_url):]
-    return url
 
   @property
   def _sections(self):
@@ -490,12 +482,6 @@ def close_ssh():
 URI_SCP = re.compile(r'^([^@:]*@?[^:/]{1,}):')
 URI_ALL = re.compile(r'^([a-z][a-z+]*)://([^@/]*@?[^/]*)/')
 
-def GetSchemeFromUrl(url):
-  m = URI_ALL.match(url)
-  if m:
-    return m.group(1)
-  return None
-
 def _preconnect(url):
   m = URI_ALL.match(url)
   if m:
@@ -575,19 +561,9 @@ class Remote(object):
         self._review_protocol = info[0]
         self._review_host = info[1]
         self._review_port = info[2]
-      elif 'REPO_HOST_PORT_INFO' in os.environ:
-        info = os.environ['REPO_HOST_PORT_INFO']
-        self._review_protocol = 'ssh'
-        self._review_host = info.split(" ")[0]
-        self._review_port = info.split(" ")[1]
-
-        REVIEW_CACHE[u] = (
-          self._review_protocol,
-          self._review_host,
-          self._review_port)
       else:
         try:
-          info = urllib2.urlopen(u).read()
+          info = urlopen(u).read()
           if info == 'NOT_AVAILABLE':
             raise UploadError('%s: SSH disabled' % self.review)
           if '<' in info:
@@ -599,15 +575,15 @@ class Remote(object):
           self._review_protocol = 'ssh'
           self._review_host = info.split(" ")[0]
           self._review_port = info.split(" ")[1]
-        except urllib2.HTTPError, e:
+        except urllib2.URLError, e:
+          raise UploadError('%s: %s' % (self.review, e.reason[1]))
+        except HTTPError, e:
           if e.code == 404:
             self._review_protocol = 'http-post'
             self._review_host = None
             self._review_port = None
           else:
-            raise UploadError('Upload over SSH unavailable')
-        except urllib2.URLError, e:
-          raise UploadError('%s: %s' % (self.review, str(e)))
+            raise UploadError('Upload over ssh unavailable')
 
         REVIEW_CACHE[u] = (
           self._review_protocol,

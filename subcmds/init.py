@@ -21,7 +21,6 @@ from color import Coloring
 from command import InteractiveCommand, MirrorSafeCommand
 from error import ManifestParseError
 from project import SyncBuffer
-from git_config import GitConfig
 from git_command import git_require, MIN_GIT_VERSION
 
 class Init(InteractiveCommand, MirrorSafeCommand):
@@ -109,8 +108,8 @@ to update the working directory files.
         sys.exit(1)
 
       if not opt.quiet:
-        print >>sys.stderr, 'Get %s' \
-          % GitConfig.ForUser().UrlInsteadOf(opt.manifest_url)
+        print >>sys.stderr, 'Getting manifest ...'
+        print >>sys.stderr, '   from %s' % opt.manifest_url
       m._InitGitDir()
 
       if opt.manifest_branch:
@@ -139,7 +138,7 @@ to update the working directory files.
         print >>sys.stderr, 'fatal: --mirror not supported on existing client'
         sys.exit(1)
 
-    if not m.Sync_NetworkHalf(is_new=is_new):
+    if not m.Sync_NetworkHalf():
       r = m.GetRemote(m.remote.name)
       print >>sys.stderr, 'fatal: cannot obtain manifest %s' % r.url
 
@@ -178,6 +177,23 @@ to update the working directory files.
     if a == '':
       return value
     return a
+  def _ShouldConfigureUser(self):
+    gc = self.manifest.globalConfig
+    mp = self.manifest.manifestProject
+
+    # If we don't have local settings, get from global.
+    if not mp.config.Has('user.name') or not mp.config.Has('user.email'):
+      if not gc.Has('user.name') or not gc.Has('user.email'):
+        return True
+
+    mp.config.SetString('user.name', gc.GetString('user.name'))
+    mp.config.SetString('user.email', gc.GetString('user.email'))
+
+    print()
+    print('Your identity is: %s <%s>' % (mp.config.GetString('user.name'),
+                                       mp.config.GetString('user.email')))
+    print('If you want to change this, please re-run \'repo init\' with --config-name')
+    return False
 
   def _ConfigureUser(self):
     mp = self.manifest.manifestProject
@@ -261,7 +277,8 @@ to update the working directory files.
     self._LinkManifest(opt.manifest_name)
 
     if os.isatty(0) and os.isatty(1) and not self.manifest.IsMirror:
-      self._ConfigureUser()
+      if self._ShouldConfigureUser():
+        self._ConfigureUser()
       self._ConfigureColor()
 
     self._ConfigureDepth(opt)

@@ -28,10 +28,10 @@ if __name__ == '__main__':
 del magic
 
 # increment this whenever we make important changes to this script
-VERSION = (1, 13)
+VERSION = (1, 10)
 
 # increment this if the MAINTAINER_KEYS block is modified
-KEYRING_VERSION = (1,0)
+KEYRING_VERSION = (1,1)
 MAINTAINER_KEYS = """
 
      Repo Maintainer <repo@android.kernel.org>
@@ -75,6 +75,38 @@ zE3GNvmJosh6leayjtI9P2A6iEkEGBECAAkFAkj3uiACGwwACgkQFlMNXpIPXGWp
 TACbBS+Up3RpfYVfd63c1cDdlru13pQAn3NQy/SN858MkxN+zym86UBgOad2
 =CMiZ
 -----END PGP PUBLIC KEY BLOCK-----
+
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+Version: GnuPG v1
+
+mQENBFf/IO8BCACkElCLcU7BJ2aoom5LI39nCbirVrfcRA8F6yG9hQ0uuJIev2o6
+RCDc3iQ5392/tvT9x1RRFPBIX/dNLBKgZh0xq/5WlcIpHf31InNR/nefFKOBgPbu
+ybcREfOaulklf+HV79rvrkxYf1kBNL9TuVFTsWPTrd8FtVZxKghbh7ubhgHapriU
+PQRnQw4YiFQWD6UtbBowPqS3TWNojTGzV+6eTjC3HCC72z+rphEadeGE6Ipk37BM
+uarCWnHfgeuP5TQK1jj1WyfdAoN5w69ER66Ym8cQjnaqmlraCjiSejUAABx8QsVz
+AE0jViApY5tTv2DsU2AdusNTDRKQgoWECYbVABEBAAG0H3l1YW5ndWFuZyA8eXVh
+bmd1YW5nQGF1dG9pby5jbj6JATgEEwECACIFAlf/IO8CGwMGCwkIBwMCBhUIAgkK
+CwQWAgMBAh4BAheAAAoJEK1yYCNLz2NYD8wH/0/eCjexkrIM+JMAEZBZwYPIIIp0
+JdXFlbrprv0jb3Gkh9trjmWdnnzCQdL9e8uxEF2npOfaApYAizL3Hqy2Cytks5zg
+MZhYfqzF/tZb7GqLg0+VaC4xcoF/5Yf84KGMd4OrBUpRA27ERM+Ezs76GX/FIiDH
+7LZD0dSpuDls/h0W2NVF1QoumRVbv+PDay1WRMEnivBCZjXDG3n55C+dqU3icZc9
+kjAcTnSLT6pCiS58Ly7LQuooBQgpsFiRaIqIOxB/y6gjfdH+oQ4hHf9Vmrsgvvgq
+3oyHTFZQOux5Zc0TcIWcjc8Yxc82vjQOk+b3FRptXrMVCV1pdbDi3DNcF4W5AQ0E
+V/8g7wEIAMRDFS0Do7WRUqioRi40AV7PFbj0NrBQig8SGFaTUU58QMie+XnOkpEv
+l6u04j2e/3lAljIEl6AU7FSNEdSa27bBxHfEWkbmVioEwAmH57pK8BKQ55p51MEm
+eZXlNtPONmQEy/Zd35GrlEVAyHn8WFcevJxuh8Ci8aPJfBrWf5xcsYPC9XpAwyZC
+tvSenCFfbZTIZMZcYlbttRuI5z1AkyKj6atgcnH1gyjBQQSg5GSBPf3DO5XjoCW7
+PaI7lOJjrxCxfzA8WnmDQUz5U7CFwnoJIy7Y0q6sEYlS29Lpb09Qt3BiFdS/kJ1v
+3M8SlTNZSPijLOGhhujKmnyfsPOzh1MAEQEAAYkBHwQYAQIACQUCV/8g7wIbDAAK
+CRCtcmAjS89jWOraB/9ItdvY20b9be4N4KhZTo8sf0XSNgWkTQcn14vN59teEkM4
+Wx4KSBsG7ko+bzw7d1QV4PMkyui3eDvfZ8sBSdywIRqcYIYIaji/CS6md/BMgp3q
+hi35VbwU0zNl3IodxbkeVt0aBACfRV4Q6W+zKBnjoNBiX4QlmorLa9Wi3iXdBEJw
+D1rjXhB5WhSXl8rjBilgHC30ctAxd9SJcc9+Jh4B2g4cZzeEDWjGJUd8tGsr52Us
+R0A4oHi78A6ksG+Wu/NFklsB0qxpLf/7vGjDMJ4whd6zWRUPf3NpxLuR2Hi/HCEt
+SBaYoFaiwCDxvNe6lrcB7BNEJpypGWKLuU7EXDrS
+=+UDX
+-----END PGP PUBLIC KEY BLOCK-----
+
 """
 
 GIT = 'git'                     # our git command
@@ -91,7 +123,6 @@ import re
 import readline
 import subprocess
 import sys
-import urllib2
 
 home_dot_repo = os.path.expanduser('~/.repoconfig')
 gpg_dir = os.path.join(home_dot_repo, 'gnupg')
@@ -122,10 +153,6 @@ group.add_option('--mirror',
 group.add_option('--reference',
                  dest='reference',
                  help='location of mirror directory', metavar='DIR')
-group.add_option('--depth', type='int', default=None,
-                 dest='depth',
-                 help='create a shallow clone with given depth; see git clone')
-
 
 # Tool
 group = init_optparse.add_option_group('repo Version options')
@@ -187,6 +214,10 @@ def _Init(args):
       can_verify = _SetupGnuPG(opt.quiet)
     else:
       can_verify = True
+
+    if not opt.quiet:
+      print >>sys.stderr, 'Getting repo ...'
+      print >>sys.stderr, '   from %s' % url
 
     dst = os.path.abspath(os.path.join(repodir, S_repo))
     _Clone(url, dst, opt.quiet)
@@ -297,42 +328,15 @@ def _SetConfig(local, name, value):
     raise CloneFailure()
 
 
-def _InitHttp():
-  handlers = []
-
-  mgr = urllib2.HTTPPasswordMgrWithDefaultRealm()
-  try:
-    import netrc
-    n = netrc.netrc()
-    for host in n.hosts:
-      p = n.hosts[host]
-      mgr.add_password(None, 'http://%s/'  % host, p[0], p[2])
-      mgr.add_password(None, 'https://%s/' % host, p[0], p[2])
-  except:
-    pass
-  handlers.append(urllib2.HTTPBasicAuthHandler(mgr))
-
-  if 'http_proxy' in os.environ:
-    url = os.environ['http_proxy']
-    handlers.append(urllib2.ProxyHandler({'http': url, 'https': url}))
-  if 'REPO_CURL_VERBOSE' in os.environ:
-    handlers.append(urllib2.HTTPHandler(debuglevel=1))
-    handlers.append(urllib2.HTTPSHandler(debuglevel=1))
-  urllib2.install_opener(urllib2.build_opener(*handlers))
-
-def _Fetch(url, local, src, quiet):
-  if not quiet:
-    print >>sys.stderr, 'Get %s' % url
-
+def _Fetch(local, quiet, *args):
   cmd = [GIT, 'fetch']
   if quiet:
     cmd.append('--quiet')
     err = subprocess.PIPE
   else:
     err = None
-  cmd.append(src)
-  cmd.append('+refs/heads/*:refs/remotes/origin/*')
-  cmd.append('refs/tags/*:refs/tags/*')
+  cmd.extend(args)
+  cmd.append('origin')
 
   proc = subprocess.Popen(cmd, cwd = local, stderr = err)
   if err:
@@ -341,62 +345,6 @@ def _Fetch(url, local, src, quiet):
   if proc.wait() != 0:
     raise CloneFailure()
 
-def _DownloadBundle(url, local, quiet):
-  if not url.endswith('/'):
-    url += '/'
-  url += 'clone.bundle'
-
-  proc = subprocess.Popen(
-    [GIT, 'config', '--get-regexp', 'url.*.insteadof'],
-    cwd = local,
-    stdout = subprocess.PIPE)
-  for line in proc.stdout:
-    m = re.compile(r'^url\.(.*)\.insteadof (.*)$').match(line)
-    if m:
-      new_url = m.group(1)
-      old_url = m.group(2)
-      if url.startswith(old_url):
-        url = new_url + url[len(old_url):]
-        break
-  proc.stdout.close()
-  proc.wait()
-
-  if not url.startswith('http:') and not url.startswith('https:'):
-    return False
-
-  dest = open(os.path.join(local, '.git', 'clone.bundle'), 'w+b')
-  try:
-    try:
-      r = urllib2.urlopen(url)
-    except urllib2.HTTPError, e:
-      if e.code == 404:
-        return False
-      print >>sys.stderr, 'fatal: Cannot get %s' % url
-      print >>sys.stderr, 'fatal: HTTP error %s' % e.code
-      raise CloneFailure()
-    except urllib2.URLError, e:
-      print >>sys.stderr, 'fatal: Cannot get %s' % url
-      print >>sys.stderr, 'fatal: error %s' % e.reason
-      raise CloneFailure()
-    try:
-      if not quiet:
-        print >>sys.stderr, 'Get %s' % url
-      while True:
-        buf = r.read(8192)
-        if buf == '':
-          return True
-        dest.write(buf)
-    finally:
-      r.close()
-  finally:
-    dest.close()
-
-def _ImportBundle(local):
-  path = os.path.join(local, '.git', 'clone.bundle')
-  try:
-    _Fetch(local, local, path, True)
-  finally:
-    os.remove(path)
 
 def _Clone(url, local, quiet):
   """Clones a git repository to a new subdirectory of repodir
@@ -424,14 +372,11 @@ def _Clone(url, local, quiet):
     print >>sys.stderr, 'fatal: could not create %s' % local
     raise CloneFailure()
 
-  _InitHttp()
   _SetConfig(local, 'remote.origin.url', url)
   _SetConfig(local, 'remote.origin.fetch',
                     '+refs/heads/*:refs/remotes/origin/*')
-  if _DownloadBundle(url, local, quiet):
-    _ImportBundle(local)
-  else:
-    _Fetch(url, local, 'origin', quiet)
+  _Fetch(local, quiet)
+  _Fetch(local, quiet, '--tags')
 
 
 def _Verify(cwd, branch, quiet):
@@ -683,3 +628,4 @@ def main(orig_args):
 
 if __name__ == '__main__':
   main(sys.argv[1:])
+
