@@ -1,5 +1,6 @@
+#!/usr/bin/env python
 #
-# Copyright (C) 2008 The Android Open Source Project
+# Copyright (C) 2014 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,22 +15,16 @@
 # limitations under the License.
 
 from __future__ import print_function
-import sys
+import imp
 import os
-REPO_TRACE = 'REPO_TRACE'
 
-try:
-  _TRACE = os.environ[REPO_TRACE] == '1'
-except KeyError:
-  _TRACE = False
 
-def IsTrace():
-  return _TRACE
+def WrapperPath():
+  return os.path.join(os.path.dirname(__file__), 'repo')
 
-def SetTrace():
-  global _TRACE
-  _TRACE = True
-
-def Trace(fmt, *args):
-  if IsTrace():
-    print(fmt % args, file=sys.stderr)
+_wrapper_module = None
+def Wrapper():
+  global _wrapper_module
+  if not _wrapper_module:
+    _wrapper_module = imp.load_source('wrapper', WrapperPath())
+  return _wrapper_module

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 2008 The Android Open Source Project
+# Copyright (C) 2013 The Android Open Source Project
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,23 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
 import sys
-import os
-REPO_TRACE = 'REPO_TRACE'
 
-try:
-  _TRACE = os.environ[REPO_TRACE] == '1'
-except KeyError:
-  _TRACE = False
-
-def IsTrace():
-  return _TRACE
-
-def SetTrace():
-  global _TRACE
-  _TRACE = True
-
-def Trace(fmt, *args):
-  if IsTrace():
-    print(fmt % args, file=sys.stderr)
+def is_python3():
+  return sys.version_info[0] == 3
