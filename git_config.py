@@ -13,7 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import cPickle
+from __future__ import print_function
+
+import json
 import os
 import re
 import subprocess
@@ -23,11 +25,25 @@ try:
 except ImportError:
   import dummy_threading as _threading
 import time
-import urllib2
+
+from pyversion import is_python3
+if is_python3():
+  import urllib.request
+  import urllib.error
+else:
+  import urllib2
+  import imp
+  urllib = imp.new_module('urllib')
+  urllib.request = urllib2
+  urllib.error = urllib2
 
 from signal import SIGTERM
 from error import GitError, UploadError
 from trace import Trace
+if is_python3():
+  from http.client import HTTPException
+else:
+  from httplib import HTTPException
 
 from git_command import GitCommand
 from git_command import ssh_sock
@@ -35,7 +51,7 @@ from git_command import terminate_ssh_clients
 
 R_HEADS = 'refs/heads/'
 R_TAGS  = 'refs/tags/'
-ID_RE = re.compile('^[0-9a-f]{40}$')
+ID_RE = re.compile(r'^[0-9a-f]{40}$')
 
 REVIEW_CACHE = dict()
 
@@ -56,28 +72,27 @@ class GitConfig(object):
   @classmethod
   def ForUser(cls):
     if cls._ForUser is None:
-      cls._ForUser = cls(file = os.path.expanduser('~/.gitconfig'))
+      cls._ForUser = cls(configfile = os.path.expanduser('~/.gitconfig'))
     return cls._ForUser
 
   @classmethod
   def ForRepository(cls, gitdir, defaults=None):
-    return cls(file = os.path.join(gitdir, 'config'),
+    return cls(configfile = os.path.join(gitdir, 'config'),
                defaults = defaults)
 
-  def __init__(self, file, defaults=None, pickleFile=None):
-    self.file = file
+  def __init__(self, configfile, defaults=None, jsonFile=None):
+    self.file = configfile
     self.defaults = defaults
     self._cache_dict = None
     self._section_dict = None
     self._remotes = {}
     self._branches = {}
 
-    if pickleFile is None:
-      self._pickle = os.path.join(
+    self._json = jsonFile
+    if self._json is None:
+      self._json = os.path.join(
         os.path.dirname(self.file),
-        '.repopickle_' + os.path.basename(self.file))
-    else:
-      self._pickle = pickleFile
+        '.repo_' + os.path.basename(self.file) + '.json')
 
   def Has(self, name, include_defaults = True):
     """Return true if this configuration file has the key.
@@ -104,20 +119,20 @@ class GitConfig(object):
       return False
     return None
 
-  def GetString(self, name, all=False):
+  def GetString(self, name, all_keys=False):
     """Get the first value for a key, or None if it is not defined.
 
        This configuration file is used first, if the key is not
-       defined or all = True then the defaults are also searched.
+       defined or all_keys = True then the defaults are also searched.
     """
     try:
       v = self._cache[_key(name)]
     except KeyError:
       if self.defaults:
-        return self.defaults.GetString(name, all = all)
+        return self.defaults.GetString(name, all_keys = all_keys)
       v = []
 
-    if not all:
+    if not all_keys:
       if v:
         return v[0]
       return None
@@ -125,7 +140,7 @@ class GitConfig(object):
     r = []
     r.extend(v)
     if self.defaults:
-      r.extend(self.defaults.GetString(name, all = True))
+      r.extend(self.defaults.GetString(name, all_keys = True))
     return r
 
   def SetString(self, name, value):
@@ -157,7 +172,7 @@ class GitConfig(object):
       elif old != value:
         self._cache[key] = list(value)
         self._do('--replace-all', name, value[0])
-        for i in xrange(1, len(value)):
+        for i in range(1, len(value)):
           self._do('--add', name, value[i])
 
     elif len(old) != 1 or old[0] != value:
@@ -201,9 +216,9 @@ class GitConfig(object):
     """Resolve any url.*.insteadof references.
     """
     for new_url in self.GetSubSections('url'):
-      old_url = self.GetString('url.%s.insteadof' % new_url)
-      if old_url is not None and url.startswith(old_url):
-        return new_url + url[len(old_url):]
+      for old_url in self.GetString('url.%s.insteadof' % new_url, True):
+        if old_url is not None and url.startswith(old_url):
+          return new_url + url[len(old_url):]
     return url
 
   @property
@@ -232,50 +247,41 @@ class GitConfig(object):
     return self._cache_dict
 
   def _Read(self):
-    d = self._ReadPickle()
+    d = self._ReadJson()
     if d is None:
       d = self._ReadGit()
-      self._SavePickle(d)
+      self._SaveJson(d)
     return d
 
-  def _ReadPickle(self):
+  def _ReadJson(self):
     try:
-      if os.path.getmtime(self._pickle) \
+      if os.path.getmtime(self._json) \
       <= os.path.getmtime(self.file):
-        os.remove(self._pickle)
+        os.remove(self._json)
         return None
     except OSError:
       return None
     try:
-      Trace(': unpickle %s', self.file)
-      fd = open(self._pickle, 'rb')
+      Trace(': parsing %s', self.file)
+      fd = open(self._json)
       try:
-        return cPickle.load(fd)
+        return json.load(fd)
       finally:
         fd.close()
-    except EOFError:
-      os.remove(self._pickle)
-      return None
-    except IOError:
-      os.remove(self._pickle)
-      return None
-    except cPickle.PickleError:
-      os.remove(self._pickle)
+    except (IOError, ValueError):
+      os.remove(self._json)
       return None
 
-  def _SavePickle(self, cache):
+  def _SaveJson(self, cache):
     try:
-      fd = open(self._pickle, 'wb')
+      fd = open(self._json, 'w')
       try:
-        cPickle.dump(cache, fd, cPickle.HIGHEST_PROTOCOL)
+        json.dump(cache, fd, indent=2)
       finally:
         fd.close()
-    except IOError:
-      if os.path.exists(self._pickle):
-        os.remove(self._pickle)
-    except cPickle.PickleError:
-      if os.path.exists(self._pickle):
-        os.remove(self._pickle)
+    except (IOError, TypeError):
+      if os.path.exists(self._json):
+        os.remove(self._json)
 
   def _ReadGit(self):
     """
@@ -288,12 +294,13 @@ class GitConfig(object):
     d = self._do('--null', '--list')
     if d is None:
       return c
-    for line in d.rstrip('\0').split('\0'):
+    for line in d.decode('utf-8').rstrip('\0').split('\0'):  # pylint: disable=W1401
+                                                             # Backslash is not anomalous
       if '\n' in line:
-          key, val = line.split('\n', 1)
+        key, val = line.split('\n', 1)
       else:
-          key = line
-          val = None
+        key = line
+        val = None
 
       if key in c:
         c[key].append(val)
@@ -418,7 +425,7 @@ def _open_ssh(host, port=None):
                      '-o','ControlPath %s' % ssh_sock(),
                      host]
     if port is not None:
-      command_base[1:1] = ['-p',str(port)]
+      command_base[1:1] = ['-p', str(port)]
 
     # Since the key wasn't in _master_keys, we think that master isn't running.
     # ...but before actually starting a master, we'll double-check.  This can
@@ -449,11 +456,10 @@ def _open_ssh(host, port=None):
     try:
       Trace(': %s', ' '.join(command))
       p = subprocess.Popen(command)
-    except Exception, e:
+    except Exception as e:
       _ssh_master = False
-      print >>sys.stderr, \
-        '\nwarn: cannot enable ssh control master for %s:%s\n%s' \
-        % (host,port, str(e))
+      print('\nwarn: cannot enable ssh control master for %s:%s\n%s'
+             % (host,port, str(e)), file=sys.stderr)
       return False
 
     _master_processes.append(p)
@@ -488,7 +494,7 @@ def close_ssh():
   _master_keys_lock = None
 
 URI_SCP = re.compile(r'^([^@:]*@?[^:/]{1,}):')
-URI_ALL = re.compile(r'^([a-z][a-z+]*)://([^@/]*@?[^/]*)/')
+URI_ALL = re.compile(r'^([a-z][a-z+-]*)://([^@/]*@?[^/]*)/')
 
 def GetSchemeFromUrl(url):
   m = URI_ALL.match(url)
@@ -525,9 +531,9 @@ class Remote(object):
     self.url = self._Get('url')
     self.review = self._Get('review')
     self.projectname = self._Get('projectname')
-    self.fetch = map(lambda x: RefSpec.FromString(x),
-                     self._Get('fetch', all=True))
-    self._review_protocol = None
+    self.fetch = list(map(RefSpec.FromString,
+                      self._Get('fetch', all_keys=True)))
+    self._review_url = None
 
   def _InsteadOf(self):
     globCfg = GitConfig.ForUser()
@@ -537,7 +543,7 @@ class Remote(object):
 
     for url in urlList:
       key = "url." + url + ".insteadOf"
-      insteadOfList = globCfg.GetString(key, all=True)
+      insteadOfList = globCfg.GetString(key, all_keys=True)
 
       for insteadOf in insteadOfList:
         if self.url.startswith(insteadOf) \
@@ -554,85 +560,66 @@ class Remote(object):
     connectionUrl = self._InsteadOf()
     return _preconnect(connectionUrl)
 
-  @property
-  def ReviewProtocol(self):
-    if self._review_protocol is None:
+  def ReviewUrl(self, userEmail):
+    if self._review_url is None:
       if self.review is None:
         return None
 
       u = self.review
-      if not u.startswith('http:') and not u.startswith('https:'):
+      if u.startswith('persistent-'):
+        u = u[len('persistent-'):]
+      if u.split(':')[0] not in ('http', 'https', 'sso'):
         u = 'http://%s' % u
       if u.endswith('/Gerrit'):
         u = u[:len(u) - len('/Gerrit')]
-      if not u.endswith('/ssh_info'):
-        if not u.endswith('/'):
-          u += '/'
-        u += 'ssh_info'
+      if u.endswith('/ssh_info'):
+        u = u[:len(u) - len('/ssh_info')]
+      if not u.endswith('/'):
+        u += '/'
+      http_url = u
 
       if u in REVIEW_CACHE:
-        info = REVIEW_CACHE[u]
-        self._review_protocol = info[0]
-        self._review_host = info[1]
-        self._review_port = info[2]
+        self._review_url = REVIEW_CACHE[u]
       elif 'REPO_HOST_PORT_INFO' in os.environ:
-        info = os.environ['REPO_HOST_PORT_INFO']
-        self._review_protocol = 'ssh'
-        self._review_host = info.split(" ")[0]
-        self._review_port = info.split(" ")[1]
-
-        REVIEW_CACHE[u] = (
-          self._review_protocol,
-          self._review_host,
-          self._review_port)
+        host, port = os.environ['REPO_HOST_PORT_INFO'].split()
+        self._review_url = self._SshReviewUrl(userEmail, host, port)
+        REVIEW_CACHE[u] = self._review_url
+      elif u.startswith('sso:'):
+        self._review_url = u  # Assume it's right
+        REVIEW_CACHE[u] = self._review_url
       else:
         try:
-          info = urllib2.urlopen(u).read()
-          if info == 'NOT_AVAILABLE':
-            raise UploadError('%s: SSH disabled' % self.review)
-          if '<' in info:
-            # Assume the server gave us some sort of HTML
-            # response back, like maybe a login page.
+          info_url = u + 'ssh_info'
+          info = urllib.request.urlopen(info_url).read()
+          if info == 'NOT_AVAILABLE' or '<' in info:
+            # If `info` contains '<', we assume the server gave us some sort
+            # of HTML response back, like maybe a login page.
             #
-            raise UploadError('%s: Cannot parse response' % u)
-
-          self._review_protocol = 'ssh'
-          self._review_host = info.split(" ")[0]
-          self._review_port = info.split(" ")[1]
-        except urllib2.HTTPError, e:
-          if e.code == 404:
-            self._review_protocol = 'http-post'
-            self._review_host = None
-            self._review_port = None
+            # Assume HTTP if SSH is not enabled or ssh_info doesn't look right.
+            self._review_url = http_url
           else:
-            raise UploadError('Upload over SSH unavailable')
-        except urllib2.URLError, e:
+            host, port = info.split()
+            self._review_url = self._SshReviewUrl(userEmail, host, port)
+        except urllib.error.HTTPError as e:
           raise UploadError('%s: %s' % (self.review, str(e)))
+        except urllib.error.URLError as e:
+          raise UploadError('%s: %s' % (self.review, str(e)))
+        except HTTPException as e:
+          raise UploadError('%s: %s' % (self.review, e.__class__.__name__))
 
-        REVIEW_CACHE[u] = (
-          self._review_protocol,
-          self._review_host,
-          self._review_port)
-    return self._review_protocol
+        REVIEW_CACHE[u] = self._review_url
+    return self._review_url + self.projectname
 
-  def SshReviewUrl(self, userEmail):
-    if self.ReviewProtocol != 'ssh':
-      return None
+  def _SshReviewUrl(self, userEmail, host, port):
     username = self._config.GetString('review.%s.username' % self.review)
     if username is None:
-      username = userEmail.split("@")[0]
-    return 'ssh://%s@%s:%s/%s' % (
-      username,
-      self._review_host,
-      self._review_port,
-      self.projectname)
+      username = userEmail.split('@')[0]
+    return 'ssh://%s@%s:%s/' % (username, host, port)
 
   def ToLocal(self, rev):
     """Convert a remote revision string to something we have locally.
     """
-    if IsId(rev):
-      return rev
-    if rev.startswith(R_TAGS):
+    if self.name == '.' or IsId(rev):
       return rev
 
     if not rev.startswith('refs/'):
@@ -641,6 +628,10 @@ class Remote(object):
     for spec in self.fetch:
       if spec.SourceMatches(rev):
         return spec.MapSource(rev)
+
+    if not rev.startswith(R_HEADS):
+      return rev
+
     raise GitError('remote %s does not have %s' % (self.name, rev))
 
   def WritesTo(self, ref):
@@ -666,15 +657,15 @@ class Remote(object):
     self._Set('url', self.url)
     self._Set('review', self.review)
     self._Set('projectname', self.projectname)
-    self._Set('fetch', map(lambda x: str(x), self.fetch))
+    self._Set('fetch', list(map(str, self.fetch)))
 
   def _Set(self, key, value):
     key = 'remote.%s.%s' % (self.name, key)
     return self._config.SetString(key, value)
 
-  def _Get(self, key, all=False):
+  def _Get(self, key, all_keys=False):
     key = 'remote.%s.%s' % (self.name, key)
-    return self._config.GetString(key, all = all)
+    return self._config.GetString(key, all_keys = all_keys)
 
 
 class Branch(object):
@@ -710,7 +701,7 @@ class Branch(object):
       self._Set('merge', self.merge)
 
     else:
-      fd = open(self._config.file, 'ab')
+      fd = open(self._config.file, 'a')
       try:
         fd.write('[branch "%s"]\n' % self.name)
         if self.remote:
@@ -724,6 +715,6 @@ class Branch(object):
     key = 'branch.%s.%s' % (self.name, key)
     return self._config.SetString(key, value)
 
-  def _Get(self, key, all=False):
+  def _Get(self, key, all_keys=False):
     key = 'branch.%s.%s' % (self.name, key)
-    return self._config.GetString(key, all = all)
+    return self._config.GetString(key, all_keys = all_keys)
